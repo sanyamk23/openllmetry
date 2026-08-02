@@ -62,11 +62,13 @@
     },
     "build-release": {
       "executor": "nx:run-commands",
-      "commands": [
-        "chmod +x ../../scripts/build-release.sh",
-        "../../scripts/build-release.sh"
-      ],
-      "cwd": "packages/opentelemetry-instrumentation-azure-search"
+      "options": {
+        "commands": [
+          "chmod +x ../../scripts/build-release.sh",
+          "../../scripts/build-release.sh"
+        ],
+        "cwd": "packages/opentelemetry-instrumentation-azure-search"
+      }
     }
   },
   "tags": [
