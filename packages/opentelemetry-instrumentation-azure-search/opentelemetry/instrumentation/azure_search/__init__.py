@@ -176,7 +176,7 @@ def _set_input_attributes(span, instance, to_wrap, args, kwargs):
     elif method in ("get_skillset", "delete_skillset", "create_skillset"):
         skillset = kwargs.get("skillset") or (args[0] if args else None)
         if hasattr(skillset, "name"):
-            set_span_attribute(span, SpanAttributes.AZURE_SEARCH_INDEXER_NAME, skillset.name)
+            set_span_attribute(span, SpanAttributes.AZURE_SEARCH_SKILLSET_NAME, skillset.name)
 
 
 @dont_throw
@@ -196,7 +196,7 @@ def _set_response_attributes(span, to_wrap, response):
     ):
         if response is not None and hasattr(response, "results"):
             results = list(response.results)
-            succeeded = sum(1 for r in results if not r.error)
+            succeeded = sum(1 for r in results if r.succeeded)
             set_span_attribute(
                 span, SpanAttributes.AZURE_SEARCH_SUCCEEDED_COUNT, succeeded,
             )

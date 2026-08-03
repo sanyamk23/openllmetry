@@ -37,7 +37,7 @@ pip install opentelemetry-instrumentation-azure-search
 | `get_index()` | `azure_search.get_index` | index_name |
 | `list_indexes()` | `azure_search.list_indexes` | — |
 | `get_index_statistics()` | `azure_search.get_index_statistics` | index_doc_count, index_size_bytes |
-| `analyze_text()` | `azure_search.analyze_text` | index_name |
+| `analyze_text()` | `azure_search.analyze_text` | — |
 | `get_service_statistics()` | `azure_search.get_service_statistics` | service_usage, service_limit |
 
 ### SearchIndexerClient
@@ -53,9 +53,9 @@ pip install opentelemetry-instrumentation-azure-search
 | `run_indexer()` | `azure_search.run_indexer` | indexer_name |
 | `reset_indexer()` | `azure_search.reset_indexer` | indexer_name |
 | `create_data_source_connection()` | `azure_search.create_data_source_connection` | — |
-| `create_skillset()` | `azure_search.create_skillset` | — |
-| `get_skillset()` | `azure_search.get_skillset` | — |
-| `delete_skillset()` | `azure_search.delete_skillset` | — |
+| `create_skillset()` | `azure_search.create_skillset` | skillset_name |
+| `get_skillset()` | `azure_search.get_skillset` | skillset_name |
+| `delete_skillset()` | `azure_search.delete_skillset` | skillset_name |
 
 ## Usage
 

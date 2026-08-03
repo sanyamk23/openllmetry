@@ -311,6 +311,7 @@ class SpanAttributes:
     AZURE_SEARCH_DOCUMENTS_COUNT = "db.azure_search.documents_count"
     AZURE_SEARCH_SUCCEEDED_COUNT = "db.azure_search.succeeded_count"
     AZURE_SEARCH_INDEXER_NAME = "db.azure_search.indexer_name"
+    AZURE_SEARCH_SKILLSET_NAME = "db.azure_search.skillset_name"
     AZURE_SEARCH_INDEXER_STATUS = "db.azure_search.indexer_status"
     AZURE_SEARCH_INDEX_DIMENSIONS = "db.azure_search.index_dimensions"
     AZURE_SEARCH_INDEX_DOC_COUNT = "db.azure_search.index_document_count"

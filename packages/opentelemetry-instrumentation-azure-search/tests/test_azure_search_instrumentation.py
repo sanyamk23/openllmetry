@@ -12,9 +12,7 @@ from opentelemetry.semconv_ai import SpanAttributes
 
 def _make_search_client(index_name="test-index"):
     """Create a mock SearchClient with patched endpoint and index."""
-    from azure.search.documents import SearchClient
-
-    client = MagicMock(spec=SearchClient)
+    client = MagicMock()
     client._endpoint = "https://test.search.windows.net"
     client._index_name = index_name
     return client
@@ -22,18 +20,14 @@ def _make_search_client(index_name="test-index"):
 
 def _make_index_client():
     """Create a mock SearchIndexClient."""
-    from azure.search.documents.indexes import SearchIndexClient
-
-    client = MagicMock(spec=SearchIndexClient)
+    client = MagicMock()
     client._endpoint = "https://test.search.windows.net"
     return client
 
 
 def _make_indexer_client():
     """Create a mock SearchIndexerClient."""
-    from azure.search.documents.indexes import SearchIndexerClient
-
-    client = MagicMock(spec=SearchIndexerClient)
+    client = MagicMock()
     client._endpoint = "https://test.search.windows.net"
     return client
 
@@ -107,7 +101,7 @@ def test_suggest_creates_span(exporter):
 def test_index_documents_creates_span(exporter):
     client = _make_search_client()
     response = MagicMock()
-    response.results = [MagicMock(error=None), MagicMock(error=None)]
+    response.results = [MagicMock(succeeded=True), MagicMock(succeeded=True)]
     client.index_documents.return_value = response
 
     docs = [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}]
@@ -125,7 +119,7 @@ def test_index_documents_creates_span(exporter):
 def test_upload_documents_creates_span(exporter):
     client = _make_search_client()
     response = MagicMock()
-    response.results = [MagicMock(error=None)]
+    response.results = [MagicMock(succeeded=True)]
     client.upload_documents.return_value = response
 
     client.upload_documents(documents=[{"id": "1"}])
@@ -140,9 +134,9 @@ def test_delete_documents_creates_span(exporter):
     client = _make_search_client()
     response = MagicMock()
     response.results = [
-        MagicMock(error=None),
-        MagicMock(error=None),
-        MagicMock(error=None),
+        MagicMock(succeeded=True),
+        MagicMock(succeeded=True),
+        MagicMock(succeeded=True),
     ]
     client.delete_documents.return_value = response
 
