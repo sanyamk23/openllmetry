@@ -124,7 +124,7 @@ def test_search_creates_span(exporter):
     assert span.attributes.get(SpanAttributes.AZURE_SEARCH_TOP) == 5
     assert span.attributes.get(SpanAttributes.AZURE_SEARCH_FILTER) == "category eq 'docs'"
     assert span.attributes.get(SpanAttributes.AZURE_SEARCH_INDEX_NAME) == "test-index"
-    assert span.attributes.get("server.address") == ENDPOINT
+    assert span.attributes.get("server.address") == "test.search.windows.net"
 
 
 def test_get_document_creates_span(exporter):
@@ -285,6 +285,17 @@ def test_create_indexer_creates_span(exporter):
 
     spans = exporter.get_finished_spans()
     idx_spans = [s for s in spans if s.name == "azure_search.create_indexer"]
+    assert len(idx_spans) == 1
+    assert idx_spans[0].attributes.get(SpanAttributes.AZURE_SEARCH_INDEXER_NAME) == "my-indexer"
+
+
+def test_create_or_update_indexer_records_indexer_name(exporter):
+    client = _make_indexer_client(body=INDEXER_BODY)
+
+    client.create_or_update_indexer(indexer={"name": "my-indexer", "dataSourceName": "ds", "targetIndexName": "i"})
+
+    spans = exporter.get_finished_spans()
+    idx_spans = [s for s in spans if s.name == "azure_search.create_or_update_indexer"]
     assert len(idx_spans) == 1
     assert idx_spans[0].attributes.get(SpanAttributes.AZURE_SEARCH_INDEXER_NAME) == "my-indexer"
 

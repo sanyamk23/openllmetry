@@ -4,6 +4,7 @@ import importlib
 import logging
 from collections.abc import Mapping
 from typing import Collection
+from urllib.parse import urlparse
 
 from opentelemetry import context as context_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
@@ -121,7 +122,7 @@ def _set_input_attributes(span, instance, to_wrap, args, kwargs):
 
     endpoint = getattr(instance, "_endpoint", None) or getattr(config, "endpoint", None)
     if endpoint:
-        set_span_attribute(span, "server.address", endpoint)
+        set_span_attribute(span, "server.address", urlparse(endpoint).netloc or endpoint)
 
     if method == "search":
         set_span_attribute(
@@ -169,7 +170,14 @@ def _set_input_attributes(span, instance, to_wrap, args, kwargs):
         index = kwargs.get("index") or kwargs.get("index_name") or kwargs.get("name") or (args[0] if args else None)
         _set_entity_name_attribute(span, SpanAttributes.AZURE_SEARCH_INDEX_NAME, index)
 
-    if method in ("get_indexer", "delete_indexer", "run_indexer", "reset_indexer", "create_indexer"):
+    if method in (
+        "get_indexer",
+        "delete_indexer",
+        "run_indexer",
+        "reset_indexer",
+        "create_indexer",
+        "create_or_update_indexer",
+    ):
         indexer = (
             kwargs.get("indexer") or kwargs.get("indexer_name") or kwargs.get("name") or (args[0] if args else None)
         )
