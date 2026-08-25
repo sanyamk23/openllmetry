@@ -2,6 +2,7 @@
 
 import importlib
 import logging
+from collections.abc import Mapping
 from typing import Collection
 
 from opentelemetry import context as context_api
@@ -65,11 +66,7 @@ WRAPPED_INDEXER_CLIENT_METHODS = [
     {"method": "delete_skillset", "span_name": "azure_search.delete_skillset"},
 ]
 
-WRAPPED_METHODS = (
-    WRAPPED_SEARCH_CLIENT_METHODS
-    + WRAPPED_INDEX_CLIENT_METHODS
-    + WRAPPED_INDEXER_CLIENT_METHODS
-)
+WRAPPED_METHODS = WRAPPED_SEARCH_CLIENT_METHODS + WRAPPED_INDEX_CLIENT_METHODS + WRAPPED_INDEXER_CLIENT_METHODS
 
 
 def _with_tracer_wrapper(func):
@@ -120,17 +117,23 @@ def _wrap(tracer, to_wrap, wrapped, instance, args, kwargs):
 def _set_input_attributes(span, instance, to_wrap, args, kwargs):
     method = to_wrap.get("method")
 
-    endpoint = getattr(instance, "_endpoint", None)
+    config = getattr(instance, "_config", None)
+
+    endpoint = getattr(instance, "_endpoint", None) or getattr(config, "endpoint", None)
     if endpoint:
         set_span_attribute(span, "server.address", endpoint)
 
     if method == "search":
         set_span_attribute(
-            span, SpanAttributes.AZURE_SEARCH_SEARCH_TEXT, kwargs.get("search_text"),
+            span,
+            SpanAttributes.AZURE_SEARCH_SEARCH_TEXT,
+            kwargs.get("search_text"),
         )
         set_span_attribute(span, SpanAttributes.AZURE_SEARCH_TOP, kwargs.get("top"))
         set_span_attribute(
-            span, SpanAttributes.AZURE_SEARCH_FILTER, kwargs.get("filter"),
+            span,
+            SpanAttributes.AZURE_SEARCH_FILTER,
+            kwargs.get("filter"),
         )
     elif method == "autocomplete":
         set_span_attribute(
@@ -153,30 +156,40 @@ def _set_input_attributes(span, instance, to_wrap, args, kwargs):
     ):
         documents = kwargs.get("documents") or (args[0] if args else [])
         set_span_attribute(
-            span, SpanAttributes.AZURE_SEARCH_DOCUMENTS_COUNT, len(documents),
+            span,
+            SpanAttributes.AZURE_SEARCH_DOCUMENTS_COUNT,
+            len(documents),
         )
 
-    index_name = getattr(instance, "_index_name", None)
+    index_name = getattr(instance, "_index_name", None) or getattr(config, "index_name", None)
     if index_name:
         set_span_attribute(span, SpanAttributes.AZURE_SEARCH_INDEX_NAME, index_name)
 
     if method in ("get_index", "delete_index", "create_index", "create_or_update_index"):
-        index = kwargs.get("index") or kwargs.get("index_name") or (args[0] if args else None)
-        if hasattr(index, "name"):
-            set_span_attribute(span, SpanAttributes.AZURE_SEARCH_INDEX_NAME, index.name)
-        elif isinstance(index, str):
-            set_span_attribute(span, SpanAttributes.AZURE_SEARCH_INDEX_NAME, index)
+        index = kwargs.get("index") or kwargs.get("index_name") or kwargs.get("name") or (args[0] if args else None)
+        _set_entity_name_attribute(span, SpanAttributes.AZURE_SEARCH_INDEX_NAME, index)
 
     if method in ("get_indexer", "delete_indexer", "run_indexer", "reset_indexer", "create_indexer"):
-        indexer = kwargs.get("indexer") or (args[0] if args else None)
-        if hasattr(indexer, "name"):
-            set_span_attribute(span, SpanAttributes.AZURE_SEARCH_INDEXER_NAME, indexer.name)
-        elif isinstance(indexer, str):
-            set_span_attribute(span, SpanAttributes.AZURE_SEARCH_INDEXER_NAME, indexer)
+        indexer = (
+            kwargs.get("indexer") or kwargs.get("indexer_name") or kwargs.get("name") or (args[0] if args else None)
+        )
+        _set_entity_name_attribute(span, SpanAttributes.AZURE_SEARCH_INDEXER_NAME, indexer)
     elif method in ("get_skillset", "delete_skillset", "create_skillset"):
-        skillset = kwargs.get("skillset") or (args[0] if args else None)
-        if hasattr(skillset, "name"):
-            set_span_attribute(span, SpanAttributes.AZURE_SEARCH_SKILLSET_NAME, skillset.name)
+        skillset = (
+            kwargs.get("skillset") or kwargs.get("skillset_name") or kwargs.get("name") or (args[0] if args else None)
+        )
+        _set_entity_name_attribute(span, SpanAttributes.AZURE_SEARCH_SKILLSET_NAME, skillset)
+
+
+@dont_throw
+def _set_entity_name_attribute(span, attribute, entity):
+    """Record an entity name from a model instance, mapping, or plain string."""
+    if isinstance(entity, str):
+        set_span_attribute(span, attribute, entity)
+    elif isinstance(entity, Mapping):
+        set_span_attribute(span, attribute, entity.get("name"))
+    elif hasattr(entity, "name"):
+        set_span_attribute(span, attribute, entity.name)
 
 
 @dont_throw
@@ -194,14 +207,19 @@ def _set_response_attributes(span, to_wrap, response):
         "merge_or_upload_documents",
         "delete_documents",
     ):
-        if response is not None and hasattr(response, "results"):
-            results = list(response.results)
-            succeeded = sum(1 for r in results if r.succeeded)
+        if response is not None:
+            results = getattr(response, "results", response)
+            results = list(results)
+            succeeded = sum(1 for r in results if getattr(r, "succeeded", False))
             set_span_attribute(
-                span, SpanAttributes.AZURE_SEARCH_SUCCEEDED_COUNT, succeeded,
+                span,
+                SpanAttributes.AZURE_SEARCH_SUCCEEDED_COUNT,
+                succeeded,
             )
             set_span_attribute(
-                span, SpanAttributes.AZURE_SEARCH_DOCUMENTS_COUNT, len(results),
+                span,
+                SpanAttributes.AZURE_SEARCH_DOCUMENTS_COUNT,
+                len(results),
             )
     elif method == "get_indexer_status" and response is not None:
         status = getattr(response, "status", None)
@@ -280,7 +298,9 @@ class AzureSearchInstrumentor(BaseInstrumentor):
     def _uninstrument(self, **kwargs):
         for wrapped_method in WRAPPED_SEARCH_CLIENT_METHODS:
             _uninstrument_method(
-                "azure.search.documents", "SearchClient", wrapped_method,
+                "azure.search.documents",
+                "SearchClient",
+                wrapped_method,
             )
 
         for wrapped_method in WRAPPED_INDEX_CLIENT_METHODS:

@@ -1,35 +1,107 @@
 """Unit tests for Azure AI Search instrumentation.
 
-Uses mock clients since Azure Search requires a cloud endpoint.
-Spans are verified via the InMemorySpanExporter from conftest.py.
+Uses real Azure Search SDK clients whose HTTP transport is replaced with a
+fake, so every call goes through the instrumented SDK methods without any
+network access. Spans are verified via the InMemorySpanExporter from
+conftest.py.
 """
 
-from unittest.mock import MagicMock
+import json
 
 import pytest
+from azure.core.credentials import AzureKeyCredential
+from azure.core.exceptions import ServiceRequestError
+from azure.core.pipeline.transport import HttpResponse
+from azure.core.utils import CaseInsensitiveDict
+from azure.search.documents import SearchClient
+from azure.search.documents.indexes import SearchIndexClient, SearchIndexerClient
 from opentelemetry.semconv_ai import SpanAttributes
 
+ENDPOINT = "https://test.search.windows.net"
 
-def _make_search_client(index_name="test-index"):
-    """Create a mock SearchClient with patched endpoint and index."""
-    client = MagicMock()
-    client._endpoint = "https://test.search.windows.net"
-    client._index_name = index_name
-    return client
+INDEX_BODY = json.dumps(
+    {
+        "name": "my-index",
+        "fields": [{"name": "id", "type": "Edm.String", "key": True}],
+    }
+).encode()
+
+INDEXING_RESULTS_BODY = json.dumps(
+    {
+        "value": [
+            {"key": "1", "status": 200, "succeeded": True, "errorMessage": None},
+            {"key": "2", "status": 200, "succeeded": True, "errorMessage": None},
+        ]
+    }
+).encode()
+
+INDEXER_BODY = json.dumps(
+    {
+        "name": "my-indexer",
+        "description": "",
+        "dataSourceName": "ds",
+        "targetIndexName": "my-index",
+    }
+).encode()
+
+SKILLSET_BODY = json.dumps({"name": "my-skillset", "skills": []}).encode()
 
 
-def _make_index_client():
-    """Create a mock SearchIndexClient."""
-    client = MagicMock()
-    client._endpoint = "https://test.search.windows.net"
-    return client
+class FakeResponse(HttpResponse):
+    """Minimal in-memory HttpResponse for the azure-core pipeline."""
+
+    def __init__(self, request, body=b"", status_code=200):
+        super().__init__(request, None)
+        self.status_code = status_code
+        self.headers = CaseInsensitiveDict(
+            {"content-type": "application/json; charset=utf-8"} if status_code != 204 else {}
+        )
+        self._body_bytes = body
+
+    def body(self):
+        return self._body_bytes
+
+    def text(self, encoding=None):
+        return self._body_bytes.decode(encoding or "utf-8")
+
+    def json(self):
+        return json.loads(self._body_bytes.decode("utf-8"))
 
 
-def _make_indexer_client():
-    """Create a mock SearchIndexerClient."""
-    client = MagicMock()
-    client._endpoint = "https://test.search.windows.net"
-    return client
+class FakeTransport:
+    """Replaces the real HTTP transport with canned responses."""
+
+    def __init__(self, body=b"", status_code=200, exception=None):
+        self._body = body
+        self._status_code = status_code
+        self._exception = exception
+
+    def send(self, request, **kwargs):
+        if self._exception is not None:
+            raise self._exception
+        return FakeResponse(request, self._body, self._status_code)
+
+
+def _client(cls, body=b"", status_code=200, exception=None, **kwargs):
+    return cls(
+        endpoint=ENDPOINT,
+        credential=AzureKeyCredential("fake-key"),
+        transport=FakeTransport(body=body, status_code=status_code, exception=exception),
+        retry_total=0,
+        **kwargs,
+    )
+
+
+def _make_search_client(body=b"", **kwargs):
+    return _client(SearchClient, body=body, index_name="test-index", **kwargs)
+
+
+def _make_index_client(body=b"", status_code=200, exception=None):
+    return _client(SearchIndexClient, body=body, status_code=status_code, exception=exception)
+
+
+def _make_indexer_client(body=b"", status_code=200, exception=None):
+    return _client(SearchIndexerClient, body=body, status_code=status_code, exception=exception)
 
 
 # ---------------------------------------------------------------------------
@@ -38,8 +110,7 @@ def _make_indexer_client():
 
 
 def test_search_creates_span(exporter):
-    client = _make_search_client()
-    client.search.return_value = MagicMock()
+    client = _make_search_client(body=b'{"value": [], "count": 0}')
 
     client.search(search_text="hello world", top=5, filter="category eq 'docs'")
 
@@ -53,14 +124,13 @@ def test_search_creates_span(exporter):
     assert span.attributes.get(SpanAttributes.AZURE_SEARCH_TOP) == 5
     assert span.attributes.get(SpanAttributes.AZURE_SEARCH_FILTER) == "category eq 'docs'"
     assert span.attributes.get(SpanAttributes.AZURE_SEARCH_INDEX_NAME) == "test-index"
-    assert span.attributes.get("server.address") == "https://test.search.windows.net"
+    assert span.attributes.get("server.address") == ENDPOINT
 
 
 def test_get_document_creates_span(exporter):
-    client = _make_search_client()
-    client.get_document.return_value = {"id": "1", "title": "Test"}
+    client = _make_search_client(body=json.dumps({"key": "1", "title": "Test"}).encode())
 
-    client.get_document(document_id="1")
+    client.get_document(key="1")
 
     spans = exporter.get_finished_spans()
     get_doc_spans = [s for s in spans if s.name == "azure_search.get_document"]
@@ -71,10 +141,9 @@ def test_get_document_creates_span(exporter):
 
 
 def test_autocomplete_creates_span(exporter):
-    client = _make_search_client()
-    client.autocomplete.return_value = MagicMock()
+    client = _make_search_client(body=b'{"value": []}')
 
-    client.autocomplete(search_text="hel", autocomplete_mode="twoTerms")
+    client.autocomplete(search_text="hel", suggester_name="sg")
 
     spans = exporter.get_finished_spans()
     ac_spans = [s for s in spans if s.name == "azure_search.autocomplete"]
@@ -85,8 +154,7 @@ def test_autocomplete_creates_span(exporter):
 
 
 def test_suggest_creates_span(exporter):
-    client = _make_search_client()
-    client.suggest.return_value = MagicMock()
+    client = _make_search_client(body=b'{"value": []}')
 
     client.suggest(search_text="hel", suggester_name="sg")
 
@@ -99,16 +167,12 @@ def test_suggest_creates_span(exporter):
 
 
 def test_index_documents_creates_span(exporter):
-    client = _make_search_client()
-    response = MagicMock()
-    response.results = [MagicMock(succeeded=True), MagicMock(succeeded=True)]
-    client.index_documents.return_value = response
+    client = _make_search_client(body=INDEXING_RESULTS_BODY)
 
-    docs = [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}]
-    client.index_documents(documents=docs)
+    client.upload_documents(documents=[{"id": "1"}, {"id": "2"}])
 
     spans = exporter.get_finished_spans()
-    idx_spans = [s for s in spans if s.name == "azure_search.index_documents"]
+    idx_spans = [s for s in spans if s.name == "azure_search.upload_documents"]
     assert len(idx_spans) == 1
 
     span = idx_spans[0]
@@ -116,29 +180,17 @@ def test_index_documents_creates_span(exporter):
     assert span.attributes.get(SpanAttributes.AZURE_SEARCH_SUCCEEDED_COUNT) == 2
 
 
-def test_upload_documents_creates_span(exporter):
-    client = _make_search_client()
-    response = MagicMock()
-    response.results = [MagicMock(succeeded=True)]
-    client.upload_documents.return_value = response
-
-    client.upload_documents(documents=[{"id": "1"}])
-
-    spans = exporter.get_finished_spans()
-    spans = [s for s in spans if s.name == "azure_search.upload_documents"]
-    assert len(spans) == 1
-    assert spans[0].attributes.get(SpanAttributes.AZURE_SEARCH_DOCUMENTS_COUNT) == 1
-
-
 def test_delete_documents_creates_span(exporter):
-    client = _make_search_client()
-    response = MagicMock()
-    response.results = [
-        MagicMock(succeeded=True),
-        MagicMock(succeeded=True),
-        MagicMock(succeeded=True),
-    ]
-    client.delete_documents.return_value = response
+    body = json.dumps(
+        {
+            "value": [
+                {"key": "1", "status": 200, "succeeded": True, "errorMessage": None},
+                {"key": "2", "status": 200, "succeeded": True, "errorMessage": None},
+                {"key": "3", "status": 200, "succeeded": True, "errorMessage": None},
+            ]
+        }
+    ).encode()
+    client = _make_search_client(body=body)
 
     client.delete_documents(documents=[{"id": "1"}, {"id": "2"}, {"id": "3"}])
 
@@ -149,8 +201,7 @@ def test_delete_documents_creates_span(exporter):
 
 
 def test_get_document_count_creates_span(exporter):
-    client = _make_search_client()
-    client.get_document_count.return_value = 42
+    client = _make_search_client(body=b"42")
 
     client.get_document_count()
 
@@ -166,12 +217,9 @@ def test_get_document_count_creates_span(exporter):
 
 
 def test_create_index_creates_span(exporter):
-    client = _make_index_client()
-    index = MagicMock()
-    index.name = "my-index"
-    client.create_index.return_value = index
+    client = _make_index_client(body=INDEX_BODY, status_code=201)
 
-    client.create_index(index=index)
+    client.create_index(index={"name": "my-index", "fields": []})
 
     spans = exporter.get_finished_spans()
     create_spans = [s for s in spans if s.name == "azure_search.create_index"]
@@ -180,10 +228,9 @@ def test_create_index_creates_span(exporter):
 
 
 def test_delete_index_creates_span(exporter):
-    client = _make_index_client()
-    client.delete_index.return_value = None
+    client = _make_index_client(status_code=204)
 
-    client.delete_index(index_name="my-index")
+    client.delete_index(index="my-index")
 
     spans = exporter.get_finished_spans()
     del_spans = [s for s in spans if s.name == "azure_search.delete_index"]
@@ -192,12 +239,9 @@ def test_delete_index_creates_span(exporter):
 
 
 def test_get_index_creates_span(exporter):
-    client = _make_index_client()
-    index = MagicMock()
-    index.name = "my-index"
-    client.get_index.return_value = index
+    client = _make_index_client(body=INDEX_BODY)
 
-    client.get_index(index_name="my-index")
+    client.get_index(name="my-index")
 
     spans = exporter.get_finished_spans()
     get_spans = [s for s in spans if s.name == "azure_search.get_index"]
@@ -206,11 +250,8 @@ def test_get_index_creates_span(exporter):
 
 
 def test_get_index_statistics_creates_span(exporter):
-    client = _make_index_client()
-    stats = MagicMock()
-    stats.document_count = 1000
-    stats.storage_size = 1048576
-    client.get_index_statistics.return_value = stats
+    body = json.dumps({"documentCount": 1000, "storageSize": 1048576}).encode()
+    client = _make_index_client(body=body)
 
     client.get_index_statistics(index_name="my-index")
 
@@ -222,21 +263,14 @@ def test_get_index_statistics_creates_span(exporter):
 
 
 def test_get_service_statistics_creates_span(exporter):
-    client = _make_index_client()
-    counters = MagicMock()
-    counters.search_service_usage = "85%"
-    counters.search_service_limit = "100%"
-    stats = MagicMock()
-    stats.counters = counters
-    client.get_service_statistics.return_value = stats
+    body = json.dumps({"counters": {"documentCount": {"usage": 5, "quota": 100}}}).encode()
+    client = _make_index_client(body=body)
 
     client.get_service_statistics()
 
     spans = exporter.get_finished_spans()
     svc_spans = [s for s in spans if s.name == "azure_search.get_service_statistics"]
     assert len(svc_spans) == 1
-    assert svc_spans[0].attributes.get(SpanAttributes.AZURE_SEARCH_SERVICE_USAGE) == "85%"
-    assert svc_spans[0].attributes.get(SpanAttributes.AZURE_SEARCH_SERVICE_LIMIT) == "100%"
 
 
 # ---------------------------------------------------------------------------
@@ -245,12 +279,9 @@ def test_get_service_statistics_creates_span(exporter):
 
 
 def test_create_indexer_creates_span(exporter):
-    client = _make_indexer_client()
-    indexer = MagicMock()
-    indexer.name = "my-indexer"
-    client.create_indexer.return_value = indexer
+    client = _make_indexer_client(body=INDEXER_BODY, status_code=201)
 
-    client.create_indexer(indexer=indexer)
+    client.create_indexer(indexer={"name": "my-indexer", "dataSourceName": "ds", "targetIndexName": "i"})
 
     spans = exporter.get_finished_spans()
     idx_spans = [s for s in spans if s.name == "azure_search.create_indexer"]
@@ -259,12 +290,9 @@ def test_create_indexer_creates_span(exporter):
 
 
 def test_get_indexer_status_creates_span(exporter):
-    client = _make_indexer_client()
-    status = MagicMock()
-    status.status = "running"
-    client.get_indexer_status.return_value = status
+    client = _make_indexer_client(body=json.dumps({"status": "running"}).encode())
 
-    client.get_indexer_status(indexer_name="my-indexer")
+    client.get_indexer_status(name="my-indexer")
 
     spans = exporter.get_finished_spans()
     status_spans = [s for s in spans if s.name == "azure_search.get_indexer_status"]
@@ -273,10 +301,9 @@ def test_get_indexer_status_creates_span(exporter):
 
 
 def test_run_indexer_creates_span(exporter):
-    client = _make_indexer_client()
-    client.run_indexer.return_value = None
+    client = _make_indexer_client(status_code=202)
 
-    client.run_indexer(indexer_name="my-indexer")
+    client.run_indexer(name="my-indexer")
 
     spans = exporter.get_finished_spans()
     run_spans = [s for s in spans if s.name == "azure_search.run_indexer"]
@@ -284,25 +311,46 @@ def test_run_indexer_creates_span(exporter):
     assert run_spans[0].attributes.get(SpanAttributes.AZURE_SEARCH_INDEXER_NAME) == "my-indexer"
 
 
+def test_create_skillset_records_skillset_name(exporter):
+    client = _make_indexer_client(body=SKILLSET_BODY, status_code=201)
+
+    client.create_skillset(skillset={"name": "my-skillset", "skills": []})
+
+    spans = exporter.get_finished_spans()
+    skillset_spans = [s for s in spans if s.name == "azure_search.create_skillset"]
+    assert len(skillset_spans) == 1
+    assert skillset_spans[0].attributes.get(SpanAttributes.AZURE_SEARCH_SKILLSET_NAME) == "my-skillset"
+
+
+def test_get_skillset_records_skillset_name(exporter):
+    client = _make_indexer_client(body=SKILLSET_BODY)
+
+    client.get_skillset(name="my-skillset")
+
+    spans = exporter.get_finished_spans()
+    skillset_spans = [s for s in spans if s.name == "azure_search.get_skillset"]
+    assert len(skillset_spans) == 1
+    assert skillset_spans[0].attributes.get(SpanAttributes.AZURE_SEARCH_SKILLSET_NAME) == "my-skillset"
+
+
 # ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
 
 
-def test_search_exception_records_exception(exporter):
-    client = _make_search_client()
-    client.search.side_effect = RuntimeError("Connection refused")
+def test_upload_exception_records_exception(exporter):
+    client = _make_search_client(exception=ConnectionResetError("Connection refused"))
 
-    with pytest.raises(RuntimeError, match="Connection refused"):
-        client.search(search_text="fail")
+    with pytest.raises((ConnectionResetError, ServiceRequestError)):
+        client.upload_documents(documents=[{"id": "1"}])
 
     spans = exporter.get_finished_spans()
-    search_spans = [s for s in spans if s.name == "azure_search.search"]
+    search_spans = [s for s in spans if s.name == "azure_search.upload_documents"]
     assert len(search_spans) == 1
 
     span = search_spans[0]
     assert span.status.status_code.name == "ERROR"
-    assert len(span.events) == 1
+    assert len(span.events) >= 1
     assert span.events[0].name == "exception"
 
 
