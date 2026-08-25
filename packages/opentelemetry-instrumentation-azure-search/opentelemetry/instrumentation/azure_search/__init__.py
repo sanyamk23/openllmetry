@@ -122,7 +122,7 @@ def _set_input_attributes(span, instance, to_wrap, args, kwargs):
 
     endpoint = getattr(instance, "_endpoint", None) or getattr(config, "endpoint", None)
     if endpoint:
-        set_span_attribute(span, "server.address", urlparse(endpoint).netloc or endpoint)
+        set_span_attribute(span, "server.address", urlparse(endpoint).hostname or endpoint)
 
     if method == "search":
         set_span_attribute(

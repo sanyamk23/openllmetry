@@ -15,6 +15,7 @@ from azure.core.pipeline.transport import HttpResponse
 from azure.core.utils import CaseInsensitiveDict
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient, SearchIndexerClient
+from azure.search.documents.indexes.models import SearchIndexer
 from opentelemetry.semconv_ai import SpanAttributes
 
 ENDPOINT = "https://test.search.windows.net"
@@ -281,7 +282,8 @@ def test_get_service_statistics_creates_span(exporter):
 def test_create_indexer_creates_span(exporter):
     client = _make_indexer_client(body=INDEXER_BODY, status_code=201)
 
-    client.create_indexer(indexer={"name": "my-indexer", "dataSourceName": "ds", "targetIndexName": "i"})
+    indexer = SearchIndexer(name="my-indexer", data_source_name="ds", target_index_name="i")
+    client.create_indexer(indexer=indexer)
 
     spans = exporter.get_finished_spans()
     idx_spans = [s for s in spans if s.name == "azure_search.create_indexer"]
