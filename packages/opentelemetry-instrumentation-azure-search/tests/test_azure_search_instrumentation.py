@@ -294,7 +294,8 @@ def test_create_indexer_creates_span(exporter):
 def test_create_or_update_indexer_records_indexer_name(exporter):
     client = _make_indexer_client(body=INDEXER_BODY)
 
-    client.create_or_update_indexer(indexer={"name": "my-indexer", "dataSourceName": "ds", "targetIndexName": "i"})
+    indexer = SearchIndexer(name="my-indexer", data_source_name="ds", target_index_name="i")
+    client.create_or_update_indexer(indexer=indexer)
 
     spans = exporter.get_finished_spans()
     idx_spans = [s for s in spans if s.name == "azure_search.create_or_update_indexer"]
